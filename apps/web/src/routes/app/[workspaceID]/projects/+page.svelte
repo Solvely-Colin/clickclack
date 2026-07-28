@@ -13,8 +13,9 @@
     Users,
     X,
   } from "@lucide/svelte";
-  import { api, readableAPIError } from "$lib/api";
+  import { api, apiURL, readableAPIError } from "$lib/api";
   import type { Project } from "$lib/types";
+  import type { GitHubAppRepository } from "./+page";
 
   let { data } = $props();
 
@@ -23,6 +24,7 @@
   let name = $state("");
   let description = $state("");
   let repositories = $state([""]);
+  let selectedGitHubRepositories = $state<string[]>([]);
   let memberIDs = $state<string[]>([]);
   let submitting = $state(false);
   let formError = $state("");
@@ -32,6 +34,7 @@
   const canManage = $derived(
     data.workspace?.role === "owner" || data.workspace?.role === "moderator",
   );
+  const githubAppConnected = $derived(data.githubApp.installations.length > 0);
 
   function closeForm() {
     formOpen = false;
@@ -57,14 +60,40 @@
       : [...memberIDs, id];
   }
 
+  function repositoryKey(repository: GitHubAppRepository) {
+    return `${repository.installation_id}:${repository.full_name}`;
+  }
+
+  function toggleGitHubRepository(repository: GitHubAppRepository) {
+    const key = repositoryKey(repository);
+    selectedGitHubRepositories = selectedGitHubRepositories.includes(key)
+      ? selectedGitHubRepositories.filter((item) => item !== key)
+      : [...selectedGitHubRepositories, key];
+  }
+
+  function connectGitHub() {
+    window.location.assign(apiURL(`/api/workspaces/${data.workspaceID}/github-app/install`));
+  }
+
   async function createProject() {
     formError = "";
     const repositoryValues = repositories.map((value) => value.trim()).filter(Boolean);
+    const githubRepositoryValues = data.githubApp.repositories
+      .filter((repository: GitHubAppRepository) =>
+        selectedGitHubRepositories.includes(repositoryKey(repository)),
+      )
+      .map((repository: GitHubAppRepository) => ({
+        installation_id: repository.installation_id,
+        full_name: repository.full_name,
+      }));
     if (!name.trim()) {
       formError = "Project name is required.";
       return;
     }
-    if (repositoryValues.length === 0) {
+    if (
+      (data.githubApp.configured && githubRepositoryValues.length === 0) ||
+      (!data.githubApp.configured && repositoryValues.length === 0)
+    ) {
       formError = "Add at least one GitHub repository.";
       return;
     }
@@ -72,21 +101,24 @@
     try {
       const response = await api<{
         project: Project;
-        webhook: { url: string; secret: string };
+        webhook?: { url: string; secret: string };
       }>(`/api/workspaces/${data.workspaceID}/projects`, {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim(),
-          repositories: repositoryValues,
+          ...(data.githubApp.configured
+            ? { github_repositories: githubRepositoryValues }
+            : { repositories: repositoryValues }),
           member_ids: memberIDs,
         }),
       });
       projects = [...projects, response.project].sort((a, b) => a.name.localeCompare(b.name));
-      webhook = response.webhook;
+      webhook = response.webhook ?? null;
       name = "";
       description = "";
       repositories = [""];
+      selectedGitHubRepositories = [];
       memberIDs = [];
       formOpen = false;
     } catch (error) {
@@ -238,32 +270,77 @@
 
         <fieldset class="project-form__fieldset">
           <legend><GitPullRequest size={16} /> GitHub repositories</legend>
-          <div class="repository-inputs">
-            {#each repositories as repository, index (index)}
-              <div class="repository-input">
-                <input
-                  value={repository}
-                  oninput={(event) => setRepository(index, event.currentTarget.value)}
-                  placeholder="https://github.com/owner/repository"
-                  aria-label={`GitHub repository ${index + 1}`}
-                />
-                <button
-                  type="button"
-                  class="projects-icon-button"
-                  aria-label={`Remove repository ${index + 1}`}
-                  title="Remove repository"
-                  disabled={repositories.length === 1}
-                  onclick={() => removeRepository(index)}
-                >
-                  <Trash2 size={16} />
+          {#if data.githubApp.configured}
+            {#if githubAppConnected}
+              <div class="github-app-heading">
+                <span>
+                  Connected to
+                  {data.githubApp.installations.map((installation) => installation.account_login).join(", ")}
+                </span>
+                <button type="button" class="projects-button projects-button--quiet" onclick={connectGitHub}>
+                  <Plus size={15} />
+                  Add installation
                 </button>
               </div>
-            {/each}
-          </div>
-          <button type="button" class="projects-button projects-button--quiet" onclick={addRepository}>
-            <Plus size={15} />
-            Add repository
-          </button>
+              <div class="repository-picker">
+                {#each data.githubApp.repositories as repository (repositoryKey(repository))}
+                  <label class="repository-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedGitHubRepositories.includes(repositoryKey(repository))}
+                      onchange={() => toggleGitHubRepository(repository)}
+                    />
+                    <GitPullRequest size={15} />
+                    <span>{repository.full_name}</span>
+                    {#if repository.private}<small>Private</small>{/if}
+                  </label>
+                {/each}
+              </div>
+              {#if data.githubApp.repositories.length === 0}
+                <div class="projects-notice">
+                  This installation does not expose any repositories to ClickClack.
+                </div>
+              {/if}
+            {:else}
+              <div class="github-app-connect">
+                <GitPullRequest size={20} />
+                <div>
+                  <strong>Connect GitHub</strong>
+                  <span>Install the ClickClack GitHub App and choose the repositories this workspace can use.</span>
+                </div>
+                <button type="button" class="projects-button projects-button--primary" onclick={connectGitHub}>
+                  Connect GitHub
+                </button>
+              </div>
+            {/if}
+          {:else}
+            <div class="repository-inputs">
+              {#each repositories as repository, index (index)}
+                <div class="repository-input">
+                  <input
+                    value={repository}
+                    oninput={(event) => setRepository(index, event.currentTarget.value)}
+                    placeholder="https://github.com/owner/repository"
+                    aria-label={`GitHub repository ${index + 1}`}
+                  />
+                  <button
+                    type="button"
+                    class="projects-icon-button"
+                    aria-label={`Remove repository ${index + 1}`}
+                    title="Remove repository"
+                    disabled={repositories.length === 1}
+                    onclick={() => removeRepository(index)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+            <button type="button" class="projects-button projects-button--quiet" onclick={addRepository}>
+              <Plus size={15} />
+              Add repository
+            </button>
+          {/if}
         </fieldset>
 
         <fieldset class="project-form__fieldset">
@@ -297,7 +374,7 @@
             type="button"
             class="projects-button projects-button--primary"
             onclick={() => void createProject()}
-            disabled={submitting}
+            disabled={submitting || (data.githubApp.configured && !githubAppConnected)}
           >
             <FolderGit2 size={16} />
             {submitting ? "Creating..." : "Create project"}

@@ -1,6 +1,11 @@
 package config
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +27,12 @@ func TestLoadDefaultsEnvAndFile(t *testing.T) {
 	t.Setenv("CLICKCLACK_GITHUB_CLIENT_SECRET", "secret")
 	t.Setenv("CLICKCLACK_GITHUB_ALLOWED_ORG", "openclaw")
 	t.Setenv("CLICKCLACK_GITHUB_MODERATOR_ORG", "openclaw")
+	t.Setenv("CLICKCLACK_GITHUB_APP_ID", "123")
+	t.Setenv("CLICKCLACK_GITHUB_APP_SLUG", "clickclack-test")
+	t.Setenv("CLICKCLACK_GITHUB_APP_CLIENT_ID", "app-client")
+	t.Setenv("CLICKCLACK_GITHUB_APP_CLIENT_SECRET", "app-secret")
+	t.Setenv("CLICKCLACK_GITHUB_APP_PRIVATE_KEY_BASE64", "cHJpdmF0ZS1rZXk=")
+	t.Setenv("CLICKCLACK_GITHUB_APP_WEBHOOK_SECRET", "webhook-secret")
 	t.Setenv("CLICKCLACK_PUSHOVER_API_TOKEN", "app-token")
 	t.Setenv("CLICKCLACK_R2_ACCOUNT_ID", "account")
 	t.Setenv("CLICKCLACK_R2_ACCESS_KEY_ID", "access")
@@ -31,7 +42,7 @@ func TestLoadDefaultsEnvAndFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":9000" || cfg.Data != "/tmp/clickclack" || cfg.DB != "sqlite:///tmp/clickclack.db" || cfg.Uploads != "r2://clickclack-uploads/prod" || cfg.Environment != "fakeco" || !cfg.MetricsEnabled || cfg.PublicURL != "https://clickclack.test" || cfg.PublicAPIURL != "https://api.clickclack.test/services/clickclack/" || len(cfg.EmbedFrameAncestors) != 2 || cfg.EmbedFrameAncestors[0] != "https://control.example.com" || cfg.CookieNamespace != "prod-2" || cfg.DevBootstrap || cfg.GitHubClientID != "client" || cfg.GitHubClientSecret != "secret" || cfg.GitHubAllowedOrg != "openclaw" || cfg.GitHubModeratorOrg != "openclaw" || cfg.PushoverAPIToken != "app-token" || cfg.R2AccountID != "account" || cfg.R2AccessKeyID != "access" || cfg.R2SecretAccessKey != "secret-access" || cfg.R2Endpoint != "https://r2.example.com" {
+	if cfg.Addr != ":9000" || cfg.Data != "/tmp/clickclack" || cfg.DB != "sqlite:///tmp/clickclack.db" || cfg.Uploads != "r2://clickclack-uploads/prod" || cfg.Environment != "fakeco" || !cfg.MetricsEnabled || cfg.PublicURL != "https://clickclack.test" || cfg.PublicAPIURL != "https://api.clickclack.test/services/clickclack/" || len(cfg.EmbedFrameAncestors) != 2 || cfg.EmbedFrameAncestors[0] != "https://control.example.com" || cfg.CookieNamespace != "prod-2" || cfg.DevBootstrap || cfg.GitHubClientID != "client" || cfg.GitHubClientSecret != "secret" || cfg.GitHubAllowedOrg != "openclaw" || cfg.GitHubModeratorOrg != "openclaw" || cfg.GitHubAppID != 123 || cfg.GitHubAppSlug != "clickclack-test" || cfg.GitHubAppClientID != "app-client" || cfg.GitHubAppClientSecret != "app-secret" || cfg.GitHubAppPrivateKeyBase64 != "cHJpdmF0ZS1rZXk=" || cfg.GitHubAppWebhookSecret != "webhook-secret" || cfg.PushoverAPIToken != "app-token" || cfg.R2AccountID != "account" || cfg.R2AccessKeyID != "access" || cfg.R2SecretAccessKey != "secret-access" || cfg.R2Endpoint != "https://r2.example.com" {
 		t.Fatalf("unexpected env config: %#v", cfg)
 	}
 
@@ -62,6 +73,12 @@ func TestLoadDefaultsEnvAndFile(t *testing.T) {
 	t.Setenv("CLICKCLACK_GITHUB_CLIENT_SECRET", "")
 	t.Setenv("CLICKCLACK_GITHUB_ALLOWED_ORG", "")
 	t.Setenv("CLICKCLACK_GITHUB_MODERATOR_ORG", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_ID", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_SLUG", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_CLIENT_ID", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_CLIENT_SECRET", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_PRIVATE_KEY_BASE64", "")
+	t.Setenv("CLICKCLACK_GITHUB_APP_WEBHOOK_SECRET", "")
 	t.Setenv("CLICKCLACK_PUSHOVER_API_TOKEN", "")
 	t.Setenv("CLICKCLACK_R2_ACCOUNT_ID", "")
 	t.Setenv("CLICKCLACK_R2_ACCESS_KEY_ID", "")
@@ -134,6 +151,23 @@ func TestValidateServe(t *testing.T) {
 	if disabled.GitHubClientID != "" || disabled.GitHubClientSecret != "" {
 		t.Fatalf("expected whitespace credentials to normalize as disabled: %#v", disabled)
 	}
+	githubApp := Config{
+		PublicURL:                 "https://chat.example.com",
+		GitHubAppID:               123,
+		GitHubAppSlug:             " clickclack-test ",
+		GitHubAppClientID:         " app-client ",
+		GitHubAppClientSecret:     " app-secret ",
+		GitHubAppPrivateKeyBase64: testGitHubAppPrivateKeyBase64(t),
+		GitHubAppWebhookSecret:    " 01234567890123456789012345678901 ",
+	}
+	if err := githubApp.ValidateServe(); err != nil {
+		t.Fatal(err)
+	}
+	if githubApp.GitHubAppSlug != "clickclack-test" || githubApp.GitHubAppClientID != "app-client" ||
+		githubApp.GitHubAppClientSecret != "app-secret" ||
+		githubApp.GitHubAppWebhookSecret != "01234567890123456789012345678901" {
+		t.Fatalf("unexpected normalized GitHub App config: %#v", githubApp)
+	}
 	sameOrigin := Config{PublicURL: "https://chat.example.com"}
 	if err := sameOrigin.ValidateServe(); err != nil || sameOrigin.PublicAPIURL != sameOrigin.PublicURL {
 		t.Fatalf("expected public API URL to default to public URL: %#v %v", sameOrigin, err)
@@ -164,6 +198,26 @@ func TestValidateServe(t *testing.T) {
 		{"missing client secret", Config{PublicURL: "https://chat.example.com", GitHubClientID: "client"}},
 		{"oauth without public url", Config{GitHubClientID: "client", GitHubClientSecret: "secret"}},
 		{"org without oauth", Config{GitHubAllowedOrg: "openclaw"}},
+		{"partial GitHub App", Config{PublicURL: "https://chat.example.com", GitHubAppID: 123}},
+		{"negative GitHub App ID", Config{GitHubAppID: -1}},
+		{"invalid GitHub App slug", Config{
+			PublicURL: "https://chat.example.com", GitHubAppID: 123, GitHubAppSlug: "ClickClack_App",
+			GitHubAppClientID: "client", GitHubAppClientSecret: "secret",
+			GitHubAppPrivateKeyBase64: testGitHubAppPrivateKeyBase64(t),
+			GitHubAppWebhookSecret:    "01234567890123456789012345678901",
+		}},
+		{"invalid GitHub App private key encoding", Config{
+			PublicURL: "https://chat.example.com", GitHubAppID: 123, GitHubAppSlug: "clickclack-test",
+			GitHubAppClientID: "client", GitHubAppClientSecret: "secret",
+			GitHubAppPrivateKeyBase64: "not-base64",
+			GitHubAppWebhookSecret:    "01234567890123456789012345678901",
+		}},
+		{"invalid GitHub App private key", Config{
+			PublicURL: "https://chat.example.com", GitHubAppID: 123, GitHubAppSlug: "clickclack-test",
+			GitHubAppClientID: "client", GitHubAppClientSecret: "secret",
+			GitHubAppPrivateKeyBase64: base64.StdEncoding.EncodeToString([]byte("not-pem")),
+			GitHubAppWebhookSecret:    "01234567890123456789012345678901",
+		}},
 		{"access domain only", Config{AccessTeamDomain: "https://openclaw.cloudflareaccess.com"}},
 		{"access audience only", Config{AccessAUD: "test-aud"}},
 		{"access domain must use https", Config{AccessTeamDomain: "http://openclaw.cloudflareaccess.com", AccessAUD: "test-aud"}},
@@ -177,6 +231,18 @@ func TestValidateServe(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testGitHubAppPrivateKeyBase64(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	return base64.StdEncoding.EncodeToString(value)
 }
 
 func TestValidateAccessConfig(t *testing.T) {

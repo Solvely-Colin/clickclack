@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -101,6 +102,13 @@ func serve(args []string) error {
 	if err := cfg.ValidateServe(); err != nil {
 		return err
 	}
+	var githubAppPrivateKey []byte
+	if cfg.GitHubAppPrivateKeyBase64 != "" {
+		githubAppPrivateKey, err = base64.StdEncoding.DecodeString(cfg.GitHubAppPrivateKeyBase64)
+		if err != nil {
+			return fmt.Errorf("decode GitHub App private key: %w", err)
+		}
+	}
 	cookieNames, err := authpolicy.NewCookieNames(cfg.CookieNamespace, cfg.PublicURL, cfg.PublicAPIURL)
 	if err != nil {
 		return err
@@ -148,6 +156,15 @@ func serve(args []string) error {
 			PublicURL:    cfg.PublicURL,
 			AllowedOrg:   cfg.GitHubAllowedOrg,
 			ModeratorOrg: cfg.GitHubModeratorOrg,
+		},
+		GitHubApp: httpapi.GitHubAppConfig{
+			AppID:         cfg.GitHubAppID,
+			Slug:          cfg.GitHubAppSlug,
+			ClientID:      cfg.GitHubAppClientID,
+			ClientSecret:  cfg.GitHubAppClientSecret,
+			PrivateKeyPEM: githubAppPrivateKey,
+			WebhookSecret: cfg.GitHubAppWebhookSecret,
+			PublicURL:     cfg.PublicAPIURL,
 		},
 		Access: httpapi.AccessConfig{
 			TeamDomain: cfg.AccessTeamDomain,

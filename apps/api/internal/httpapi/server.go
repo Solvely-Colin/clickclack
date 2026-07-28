@@ -32,6 +32,7 @@ type Server struct {
 	uploadDir             string
 	uploadStorage         uploadstore.Store
 	githubOAuth           GitHubOAuthConfig
+	githubApp             GitHubAppConfig
 	access                *accessVerifier
 	frontendURL           string
 	publicAPIURL          string
@@ -79,6 +80,7 @@ type Options struct {
 	UploadDir           string
 	UploadStorage       uploadstore.Store
 	GitHubOAuth         GitHubOAuthConfig
+	GitHubApp           GitHubAppConfig
 	Access              AccessConfig
 	FrontendURL         string
 	PublicAPIURL        string
@@ -111,6 +113,7 @@ func New(st store.Store, hub *realtime.Hub, options Options) *Server {
 		uploadDir:             options.UploadDir,
 		uploadStorage:         uploadStorage,
 		githubOAuth:           options.GitHubOAuth.withDefaults(),
+		githubApp:             options.GitHubApp.withDefaults(),
 		access:                newAccessVerifier(options.Access),
 		frontendURL:           strings.TrimSpace(options.FrontendURL),
 		publicAPIURL:          strings.TrimRight(strings.TrimSpace(options.PublicAPIURL), "/"),
@@ -171,6 +174,10 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/workspaces/{workspace_id}/channels", s.createChannel)
 		r.Get("/workspaces/{workspace_id}/projects", s.listProjects)
 		r.Post("/workspaces/{workspace_id}/projects", s.createProject)
+		r.Get("/workspaces/{workspace_id}/github-app", s.getWorkspaceGitHubApp)
+		r.Get("/workspaces/{workspace_id}/github-app/install", s.startGitHubAppInstall)
+		r.Get("/github/app/setup", s.githubAppSetup)
+		r.Get("/github/app/callback", s.githubAppCallback)
 		r.Get("/projects/{project_id}", s.getProject)
 		r.Get("/projects/{project_id}/context", s.getProjectContext)
 		r.Get("/workspaces/{workspace_id}/topics", s.listTopics)
@@ -234,6 +241,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/dms/{conversation_id}/read", s.markDirectRead)
 		r.Post("/hooks/mattermost/{channel_id}", s.mattermostWebhook)
 		r.Post("/hooks/slash/{channel_id}", s.slashCommand)
+		r.Post("/hooks/github/app", s.githubAppWebhook)
 		r.Post("/hooks/github/projects/{project_id}", s.githubProjectWebhook)
 	})
 

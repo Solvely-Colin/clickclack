@@ -217,6 +217,17 @@ type EventSubscription struct {
 	RevokedAt         sql.NullString `json:"revoked_at"`
 }
 
+type GithubAppInstallation struct {
+	InstallationID      int64  `json:"installation_id"`
+	WorkspaceID         string `json:"workspace_id"`
+	AccountLogin        string `json:"account_login"`
+	AccountType         string `json:"account_type"`
+	RepositorySelection string `json:"repository_selection"`
+	InstalledBy         string `json:"installed_by"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
+}
+
 type GithubDelivery struct {
 	ProjectID   string         `json:"project_id"`
 	DeliveryID  string         `json:"delivery_id"`
@@ -328,14 +339,15 @@ type ProjectMember struct {
 }
 
 type ProjectRepository struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
-	Provider  string `json:"provider"`
-	Owner     string `json:"owner"`
-	Name      string `json:"name"`
-	FullName  string `json:"full_name"`
-	Url       string `json:"url"`
-	CreatedAt string `json:"created_at"`
+	ID                   string        `json:"id"`
+	ProjectID            string        `json:"project_id"`
+	GithubInstallationID sql.NullInt64 `json:"github_installation_id"`
+	Provider             string        `json:"provider"`
+	Owner                string        `json:"owner"`
+	Name                 string        `json:"name"`
+	FullName             string        `json:"full_name"`
+	Url                  string        `json:"url"`
+	CreatedAt            string        `json:"created_at"`
 }
 
 type Reaction struct {

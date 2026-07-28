@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -151,14 +152,17 @@ func TestGitHubDeliveryRetryMigrationUpgradesExistingRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, _, err := st.CreateProject(ctx, store.CreateProjectInput{
-		WorkspaceID: workspaces[0].ID, Name: "Upgrade", CreatedBy: owner.ID, WebhookSecret: "test-secret",
-		Repositories: []store.CreateProjectRepositoryInput{{
-			Owner: "openclaw", Name: "clickclack", FullName: "openclaw/clickclack",
-			URL: "https://github.com/openclaw/clickclack",
-		}},
-	})
+	channels, err := st.ListChannels(ctx, workspaces[0].ID, owner.ID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	const projectID = "prj_upgrade_delivery"
+	if _, err := st.db.ExecContext(ctx, `
+		INSERT INTO projects (
+			id, workspace_id, name, slug, description, channel_id,
+			integration_user_id, webhook_secret, created_by, created_at
+		) VALUES (?, ?, 'Upgrade', 'upgrade', '', ?, ?, 'test-secret', ?, ?)
+	`, projectID, workspaces[0].ID, channels[0].ID, owner.ID, owner.ID, now()); err != nil {
 		t.Fatal(err)
 	}
 	const processingAt = "2026-01-02T03:04:05Z"
@@ -167,7 +171,7 @@ func TestGitHubDeliveryRetryMigrationUpgradesExistingRows(t *testing.T) {
 		INSERT INTO github_deliveries (project_id, delivery_id, event_type, status, created_at, completed_at)
 		VALUES (?, 'old-processing', 'issues', 'processing', ?, NULL),
 		       (?, 'old-complete', 'pull_request', 'complete', ?, ?)
-	`, project.ID, processingAt, project.ID, processingAt, completedAt); err != nil {
+	`, projectID, processingAt, projectID, processingAt, completedAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Migrate(ctx); err != nil {
@@ -187,7 +191,7 @@ func TestGitHubDeliveryRetryMigrationUpgradesExistingRows(t *testing.T) {
 			SELECT status, updated_at, failed_at
 			FROM github_deliveries
 			WHERE project_id = ? AND delivery_id = ?
-		`, project.ID, tc.deliveryID).Scan(&status, &updatedAt, &failedAt); err != nil {
+		`, projectID, tc.deliveryID).Scan(&status, &updatedAt, &failedAt); err != nil {
 			t.Fatal(err)
 		}
 		if status != tc.wantStatus || updatedAt != tc.wantUpdated || failedAt.Valid != tc.wantFailed {
@@ -195,14 +199,14 @@ func TestGitHubDeliveryRetryMigrationUpgradesExistingRows(t *testing.T) {
 		}
 	}
 
-	if err := st.FailGitHubDelivery(ctx, project.ID, "old-processing"); err != nil {
+	if err := st.FailGitHubDelivery(ctx, projectID, "old-processing"); err != nil {
 		t.Fatal(err)
 	}
-	claim, err := st.ClaimGitHubDelivery(ctx, project.ID, "old-processing", "issues")
+	claim, err := st.ClaimGitHubDelivery(ctx, projectID, "old-processing", "issues")
 	if err != nil || claim != store.GitHubDeliveryClaimed {
 		t.Fatalf("expected upgraded failed delivery to be retryable, claim=%q err=%v", claim, err)
 	}
-	claim, err = st.ClaimGitHubDelivery(ctx, project.ID, "old-complete", "pull_request")
+	claim, err = st.ClaimGitHubDelivery(ctx, projectID, "old-complete", "pull_request")
 	if err != nil || claim != store.GitHubDeliveryComplete {
 		t.Fatalf("expected upgraded complete delivery to stay deduplicated, claim=%q err=%v", claim, err)
 	}
@@ -244,5 +248,79 @@ func TestProjectCreationRequiresWorkspaceManager(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("expected rejected creation to roll back, got %#v", projects)
+	}
+}
+
+func TestGitHubAppInstallationRoutesProjects(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newTestStore(t)
+	owner, err := st.EnsureBootstrap(ctx, "Owner", "github-app-store-owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := st.ListWorkspaces(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := workspaces[0]
+	member, err := st.CreateUser(ctx, store.CreateUserInput{
+		DisplayName: "Member", Email: "github-app-store-member@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddWorkspaceMember(ctx, workspace.ID, member.ID, "member"); err != nil {
+		t.Fatal(err)
+	}
+	input := store.UpsertGitHubAppInstallationInput{
+		InstallationID: 99, WorkspaceID: workspace.ID, AccountLogin: "openclaw",
+		AccountType: "Organization", RepositorySelection: "selected", InstalledBy: member.ID,
+	}
+	if _, err := st.UpsertGitHubAppInstallation(ctx, input); !errors.Is(err, store.ErrNotWorkspaceManager) {
+		t.Fatalf("member installation error = %v, want manager denial", err)
+	}
+	input.InstalledBy = owner.ID
+	installation, err := st.UpsertGitHubAppInstallation(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installation.InstallationID != 99 || installation.WorkspaceID != workspace.ID {
+		t.Fatalf("unexpected installation: %#v", installation)
+	}
+	secondWorkspace, err := st.CreateWorkspace(ctx, store.CreateWorkspaceInput{Name: "Second"}, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInput := input
+	secondInput.WorkspaceID = secondWorkspace.ID
+	if _, err := st.UpsertGitHubAppInstallation(ctx, secondInput); err != nil {
+		t.Fatalf("same GitHub installation could not be linked to a second workspace: %v", err)
+	}
+	installations, err := st.ListGitHubAppInstallations(ctx, workspace.ID, member.ID)
+	if err != nil || len(installations) != 1 {
+		t.Fatalf("member installation list = %#v, %v", installations, err)
+	}
+	project, _, err := st.CreateProject(ctx, store.CreateProjectInput{
+		WorkspaceID: workspace.ID, Name: "GitHub App", CreatedBy: owner.ID, WebhookSecret: "internal-secret",
+		Repositories: []store.CreateProjectRepositoryInput{{
+			Owner: "openclaw", Name: "clickclack", FullName: "openclaw/clickclack",
+			URL: "https://github.com/openclaw/clickclack", GitHubInstallationID: 99,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(project.Repositories) != 1 || project.Repositories[0].GitHubInstallationID == nil ||
+		*project.Repositories[0].GitHubInstallationID != 99 {
+		t.Fatalf("project installation mapping was not hydrated: %#v", project.Repositories)
+	}
+	targets, err := st.ListGitHubAppWebhookTargets(ctx, 99, "OPENCLAW/CLICKCLACK")
+	if err != nil || len(targets) != 1 || targets[0].ProjectID != project.ID {
+		t.Fatalf("unexpected GitHub App targets: %#v, %v", targets, err)
+	}
+	targets, err = st.ListGitHubAppWebhookTargets(ctx, 100, "openclaw/clickclack")
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("wrong installation routed to project: %#v, %v", targets, err)
 	}
 }

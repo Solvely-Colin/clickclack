@@ -66,6 +66,7 @@ export type ProjectRepository = {
   name: string;
   full_name: string;
   url: string;
+  github_installation_id?: number;
   created_at: string;
 };
 

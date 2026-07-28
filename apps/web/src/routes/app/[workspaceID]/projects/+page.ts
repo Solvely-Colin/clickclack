@@ -9,6 +9,38 @@ import {
   type WorkspaceMemberPage,
 } from "$lib/workspace-members";
 
+export type GitHubAppInstallation = {
+  installation_id: number;
+  workspace_id: string;
+  account_login: string;
+  account_type: string;
+  repository_selection: "all" | "selected";
+  installed_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubAppRepository = {
+  installation_id: number;
+  id: number;
+  full_name: string;
+  html_url: string;
+  private: boolean;
+};
+
+export type GitHubAppStatus = {
+  configured: boolean;
+  slug?: string;
+  installations: GitHubAppInstallation[];
+  repositories: GitHubAppRepository[];
+};
+
+const emptyGitHubApp: GitHubAppStatus = {
+  configured: false,
+  installations: [],
+  repositories: [],
+};
+
 async function loadAllWorkspaceMembers(
   workspaceID: string,
 ): Promise<WorkspaceMemberPage["members"]> {
@@ -45,18 +77,24 @@ export async function load({ params }: { params: { workspaceID: string } }) {
         workspace: undefined,
         projects: [] as Project[],
         members: [] as WorkspaceMemberPage["members"],
+        githubApp: emptyGitHubApp,
         loadError: "Workspace not found",
       };
     }
-    const [projectData, members] = await Promise.all([
+    const canManage = workspace.role === "owner" || workspace.role === "moderator";
+    const [projectData, members, githubApp] = await Promise.all([
       api<{ projects: Project[] }>(`/api/workspaces/${workspace.id}/projects`),
       loadAllWorkspaceMembers(workspace.id),
+      canManage
+        ? api<GitHubAppStatus>(`/api/workspaces/${workspace.id}/github-app`)
+        : Promise.resolve(emptyGitHubApp),
     ]);
     return {
       workspaceID: workspace.id,
       workspace,
       projects: projectData.projects,
       members: members.filter((member) => member.role !== "guest"),
+      githubApp,
       loadError,
     };
   } catch (error) {
@@ -66,6 +104,7 @@ export async function load({ params }: { params: { workspaceID: string } }) {
       workspace: undefined,
       projects: [] as Project[],
       members: [] as WorkspaceMemberPage["members"],
+      githubApp: emptyGitHubApp,
       loadError,
     };
   }

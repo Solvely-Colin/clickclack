@@ -2947,28 +2947,30 @@ func (q *Queries) InsertProjectMember(ctx context.Context, arg InsertProjectMemb
 
 const insertProjectRepository = `-- name: InsertProjectRepository :exec
 INSERT INTO project_repositories (
-  id, project_id, provider, owner, name, full_name, url, created_at
+  id, project_id, github_installation_id, provider, owner, name, full_name, url, created_at
 )
 VALUES (
-  $1, $2, 'github', $3, $4,
-  $5, $6, $7
+  $1, $2, $3, 'github', $4, $5,
+  $6, $7, $8
 )
 `
 
 type InsertProjectRepositoryParams struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
-	Owner     string `json:"owner"`
-	Name      string `json:"name"`
-	FullName  string `json:"full_name"`
-	Url       string `json:"url"`
-	CreatedAt string `json:"created_at"`
+	ID                   string        `json:"id"`
+	ProjectID            string        `json:"project_id"`
+	GithubInstallationID sql.NullInt64 `json:"github_installation_id"`
+	Owner                string        `json:"owner"`
+	Name                 string        `json:"name"`
+	FullName             string        `json:"full_name"`
+	Url                  string        `json:"url"`
+	CreatedAt            string        `json:"created_at"`
 }
 
 func (q *Queries) InsertProjectRepository(ctx context.Context, arg InsertProjectRepositoryParams) error {
 	_, err := q.db.ExecContext(ctx, insertProjectRepository,
 		arg.ID,
 		arg.ProjectID,
+		arg.GithubInstallationID,
 		arg.Owner,
 		arg.Name,
 		arg.FullName,
@@ -3955,6 +3957,103 @@ func (q *Queries) ListEventsAfter(ctx context.Context, arg ListEventsAfterParams
 	return items, nil
 }
 
+const listGitHubAppInstallations = `-- name: ListGitHubAppInstallations :many
+SELECT installation_id, workspace_id, account_login, account_type,
+       repository_selection, installed_by, created_at, updated_at
+FROM github_app_installations
+WHERE workspace_id = $1
+ORDER BY account_login, installation_id
+`
+
+func (q *Queries) ListGitHubAppInstallations(ctx context.Context, workspaceID string) ([]GithubAppInstallation, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHubAppInstallations, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GithubAppInstallation
+	for rows.Next() {
+		var i GithubAppInstallation
+		if err := rows.Scan(
+			&i.InstallationID,
+			&i.WorkspaceID,
+			&i.AccountLogin,
+			&i.AccountType,
+			&i.RepositorySelection,
+			&i.InstalledBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGitHubAppWebhookTargets = `-- name: ListGitHubAppWebhookTargets :many
+SELECT p.id AS project_id, p.workspace_id, p.channel_id, p.integration_user_id,
+       pr.id AS repository_id, pr.full_name AS repository_full_name, p.webhook_secret
+FROM projects p
+JOIN project_repositories pr ON pr.project_id = p.id
+WHERE pr.github_installation_id = $1
+  AND pr.provider = 'github'
+  AND pr.full_name = $2
+ORDER BY p.id
+`
+
+type ListGitHubAppWebhookTargetsParams struct {
+	InstallationID     sql.NullInt64 `json:"installation_id"`
+	RepositoryFullName string        `json:"repository_full_name"`
+}
+
+type ListGitHubAppWebhookTargetsRow struct {
+	ProjectID          string `json:"project_id"`
+	WorkspaceID        string `json:"workspace_id"`
+	ChannelID          string `json:"channel_id"`
+	IntegrationUserID  string `json:"integration_user_id"`
+	RepositoryID       string `json:"repository_id"`
+	RepositoryFullName string `json:"repository_full_name"`
+	WebhookSecret      string `json:"webhook_secret"`
+}
+
+func (q *Queries) ListGitHubAppWebhookTargets(ctx context.Context, arg ListGitHubAppWebhookTargetsParams) ([]ListGitHubAppWebhookTargetsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHubAppWebhookTargets, arg.InstallationID, arg.RepositoryFullName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGitHubAppWebhookTargetsRow
+	for rows.Next() {
+		var i ListGitHubAppWebhookTargetsRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.IntegrationUserID,
+			&i.RepositoryID,
+			&i.RepositoryFullName,
+			&i.WebhookSecret,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingUploadCleanups = `-- name: ListPendingUploadCleanups :many
 SELECT id, workspace_id, storage_path, attempts, last_error, created_at, updated_at
 FROM pending_upload_cleanups
@@ -4045,7 +4144,7 @@ func (q *Queries) ListProjectMembers(ctx context.Context, projectID string) ([]L
 }
 
 const listProjectRepositories = `-- name: ListProjectRepositories :many
-SELECT id, project_id, provider, owner, name, full_name, url, created_at
+SELECT id, project_id, github_installation_id, provider, owner, name, full_name, url, created_at
 FROM project_repositories
 WHERE project_id = $1
 ORDER BY full_name, id
@@ -4063,6 +4162,7 @@ func (q *Queries) ListProjectRepositories(ctx context.Context, projectID string)
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
+			&i.GithubInstallationID,
 			&i.Provider,
 			&i.Owner,
 			&i.Name,
@@ -5948,6 +6048,62 @@ func (q *Queries) UpsertDirectRead(ctx context.Context, arg UpsertDirectReadPara
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertGitHubAppInstallation = `-- name: UpsertGitHubAppInstallation :one
+INSERT INTO github_app_installations (
+  installation_id, workspace_id, account_login, account_type, repository_selection,
+  installed_by, created_at, updated_at
+)
+VALUES (
+  $1, $2, $3,
+  $4, $5, $6,
+  $7, $8
+)
+ON CONFLICT(installation_id, workspace_id) DO UPDATE SET
+  account_login = excluded.account_login,
+  account_type = excluded.account_type,
+  repository_selection = excluded.repository_selection,
+  installed_by = excluded.installed_by,
+  updated_at = excluded.updated_at
+RETURNING installation_id, workspace_id, account_login, account_type,
+          repository_selection, installed_by, created_at, updated_at
+`
+
+type UpsertGitHubAppInstallationParams struct {
+	InstallationID      int64  `json:"installation_id"`
+	WorkspaceID         string `json:"workspace_id"`
+	AccountLogin        string `json:"account_login"`
+	AccountType         string `json:"account_type"`
+	RepositorySelection string `json:"repository_selection"`
+	InstalledBy         string `json:"installed_by"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
+}
+
+func (q *Queries) UpsertGitHubAppInstallation(ctx context.Context, arg UpsertGitHubAppInstallationParams) (GithubAppInstallation, error) {
+	row := q.db.QueryRowContext(ctx, upsertGitHubAppInstallation,
+		arg.InstallationID,
+		arg.WorkspaceID,
+		arg.AccountLogin,
+		arg.AccountType,
+		arg.RepositorySelection,
+		arg.InstalledBy,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i GithubAppInstallation
+	err := row.Scan(
+		&i.InstallationID,
+		&i.WorkspaceID,
+		&i.AccountLogin,
+		&i.AccountType,
+		&i.RepositorySelection,
+		&i.InstalledBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertGuestWorkspaceMemberRole = `-- name: UpsertGuestWorkspaceMemberRole :exec

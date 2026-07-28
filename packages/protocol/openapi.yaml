@@ -505,6 +505,53 @@ paths:
                 $ref: "#/components/schemas/CreateProjectResponse"
         "403":
           description: Workspace manager permission required
+  /api/workspaces/{workspace_id}/github-app:
+    get:
+      operationId: getWorkspaceGitHubApp
+      summary: Get GitHub App installations and repositories available to a workspace
+      parameters:
+        - $ref: "#/components/parameters/workspace_id"
+      responses:
+        "200":
+          description: GitHub App connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubAppStatus"
+  /api/workspaces/{workspace_id}/github-app/install:
+    get:
+      operationId: startGitHubAppInstall
+      summary: Start installing the configured GitHub App for a workspace
+      parameters:
+        - $ref: "#/components/parameters/workspace_id"
+      responses:
+        "302":
+          description: Redirect to the GitHub App installation page
+        "403":
+          description: Workspace manager permission required
+  /api/github/app/setup:
+    get:
+      operationId: finishGitHubAppSetup
+      summary: Continue a GitHub App installation through user verification
+      responses:
+        "302":
+          description: Redirect to GitHub OAuth verification
+  /api/github/app/callback:
+    get:
+      operationId: verifyGitHubAppInstallation
+      summary: Verify and connect a GitHub App installation to a workspace
+      responses:
+        "302":
+          description: Redirect to the workspace Projects page
+  /api/hooks/github/app:
+    post:
+      operationId: receiveGitHubAppWebhook
+      summary: Receive signed repository activity from the configured GitHub App
+      responses:
+        "202":
+          description: Delivery accepted, ignored, or already processed
+        "401":
+          description: Invalid webhook signature
   /api/projects/{project_id}:
     get:
       operationId: getProject
@@ -2927,7 +2974,7 @@ components:
           format: int64
     CreateProjectRequest:
       type: object
-      required: [name, repositories]
+      required: [name]
       properties:
         name:
           type: string
@@ -2943,6 +2990,11 @@ components:
           items:
             type: string
             description: GitHub repository URL or owner/name identifier.
+        github_repositories:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/GitHubAppRepositorySelection"
         member_ids:
           type: array
           items:
@@ -2967,6 +3019,9 @@ components:
         url:
           type: string
           format: uri
+        github_installation_id:
+          type: integer
+          format: int64
         created_at:
           type: string
           format: date-time
@@ -3022,9 +3077,77 @@ components:
         secret:
           type: string
           description: One-time webhook secret returned only when the project is created.
+    GitHubAppRepositorySelection:
+      type: object
+      required: [installation_id, full_name]
+      properties:
+        installation_id:
+          type: integer
+          format: int64
+        full_name:
+          type: string
+          description: Canonical GitHub owner/name identifier.
+    GitHubAppInstallation:
+      type: object
+      required:
+        [installation_id, workspace_id, account_login, account_type, repository_selection, installed_by, created_at, updated_at]
+      properties:
+        installation_id:
+          type: integer
+          format: int64
+        workspace_id:
+          type: string
+        account_login:
+          type: string
+        account_type:
+          type: string
+        repository_selection:
+          type: string
+          enum: [all, selected]
+        installed_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    GitHubAppRepository:
+      type: object
+      required: [installation_id, id, full_name, html_url, private]
+      properties:
+        installation_id:
+          type: integer
+          format: int64
+        id:
+          type: integer
+          format: int64
+        full_name:
+          type: string
+        html_url:
+          type: string
+          format: uri
+        private:
+          type: boolean
+    GitHubAppStatus:
+      type: object
+      required: [configured, installations, repositories]
+      properties:
+        configured:
+          type: boolean
+        slug:
+          type: string
+        installations:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubAppInstallation"
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubAppRepository"
     CreateProjectResponse:
       type: object
-      required: [project, webhook]
+      required: [project]
       properties:
         project:
           $ref: "#/components/schemas/Project"

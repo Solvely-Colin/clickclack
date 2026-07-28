@@ -44,6 +44,12 @@ hook in `cmd/clickclack/main.go`.
 | —                     | `CLICKCLACK_GITHUB_CLIENT_SECRET`| unset       | GitHub OAuth app client secret. |
 | —                     | `CLICKCLACK_GITHUB_ALLOWED_ORG`  | unset       | Optional GitHub org login gate. Requires `read:org` scope. |
 | —                     | `CLICKCLACK_GITHUB_MODERATOR_ORG`| unset       | Optional GitHub org whose members become guest-workspace moderators. Requires `read:org` scope. |
+| —                     | `CLICKCLACK_GITHUB_APP_ID`        | unset       | GitHub App numeric ID for project repository connections. |
+| —                     | `CLICKCLACK_GITHUB_APP_SLUG`      | unset       | GitHub App URL slug, such as `clickclack-projects`. |
+| —                     | `CLICKCLACK_GITHUB_APP_CLIENT_ID` | unset       | GitHub App client ID used to verify the installing user. |
+| —                     | `CLICKCLACK_GITHUB_APP_CLIENT_SECRET` | unset  | GitHub App client secret used to verify the installing user. |
+| —                     | `CLICKCLACK_GITHUB_APP_PRIVATE_KEY_BASE64` | unset | Base64-encoded GitHub App private key PEM. |
+| —                     | `CLICKCLACK_GITHUB_APP_WEBHOOK_SECRET` | unset  | Secret used to verify the GitHub App webhook and sign short-lived install state. |
 | —                     | `CLICKCLACK_PUSHOVER_API_TOKEN`  | unset       | Pushover application API token. Users still opt in with their own Pushover user key in account settings. |
 | —                     | `CLICKCLACK_R2_ACCOUNT_ID`       | unset       | Cloudflare account ID for `r2://` uploads. |
 | —                     | `CLICKCLACK_R2_ACCESS_KEY_ID`    | unset       | R2 API token access key ID. |
@@ -71,6 +77,12 @@ hook in `cmd/clickclack/main.go`.
   "github_client_secret": "...",
   "github_allowed_org": "openclaw",
   "github_moderator_org": "openclaw",
+  "github_app_id": 123456,
+  "github_app_slug": "clickclack-projects",
+  "github_app_client_id": "Iv23.xxxxxxxxxxxx",
+  "github_app_client_secret": "...",
+  "github_app_private_key_base64": "...",
+  "github_app_webhook_secret": "...",
   "pushover_api_token": "azGDORePK8gMaC0QOYAMyEEuzJnyUi",
   "r2_account_id": "91b59577e757131d68d55a471fe32aca",
   "r2_access_key_id": "...",

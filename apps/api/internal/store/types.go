@@ -245,14 +245,15 @@ type Project struct {
 }
 
 type ProjectRepository struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
-	Provider  string `json:"provider"`
-	Owner     string `json:"owner"`
-	Name      string `json:"name"`
-	FullName  string `json:"full_name"`
-	URL       string `json:"url"`
-	CreatedAt string `json:"created_at"`
+	ID                   string `json:"id"`
+	ProjectID            string `json:"project_id"`
+	GitHubInstallationID *int64 `json:"github_installation_id,omitempty"`
+	Provider             string `json:"provider"`
+	Owner                string `json:"owner"`
+	Name                 string `json:"name"`
+	FullName             string `json:"full_name"`
+	URL                  string `json:"url"`
+	CreatedAt            string `json:"created_at"`
 }
 
 type ProjectMember struct {
@@ -261,10 +262,11 @@ type ProjectMember struct {
 }
 
 type CreateProjectRepositoryInput struct {
-	Owner    string
-	Name     string
-	FullName string
-	URL      string
+	GitHubInstallationID int64
+	Owner                string
+	Name                 string
+	FullName             string
+	URL                  string
 }
 
 type CreateProjectInput struct {
@@ -297,6 +299,9 @@ func ValidateCreateProjectInput(input CreateProjectInput) error {
 		return errors.New("a project can link at most 50 GitHub repositories")
 	}
 	for _, repository := range input.Repositories {
+		if repository.GitHubInstallationID < 0 {
+			return errors.New("GitHub installation ID cannot be negative")
+		}
 		owner := strings.TrimSpace(repository.Owner)
 		repositoryName := strings.TrimSpace(repository.Name)
 		fullName := strings.TrimSpace(repository.FullName)
@@ -322,6 +327,26 @@ type GitHubWebhookTarget struct {
 	RepositoryID       string
 	RepositoryFullName string
 	WebhookSecret      string
+}
+
+type GitHubAppInstallation struct {
+	InstallationID      int64  `json:"installation_id"`
+	WorkspaceID         string `json:"workspace_id"`
+	AccountLogin        string `json:"account_login"`
+	AccountType         string `json:"account_type"`
+	RepositorySelection string `json:"repository_selection"`
+	InstalledBy         string `json:"installed_by"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
+}
+
+type UpsertGitHubAppInstallationInput struct {
+	InstallationID      int64
+	WorkspaceID         string
+	AccountLogin        string
+	AccountType         string
+	RepositorySelection string
+	InstalledBy         string
 }
 
 type GitHubDeliveryClaim string
@@ -1194,7 +1219,10 @@ type Store interface {
 	ListProjects(ctx context.Context, workspaceID, userID string) ([]Project, error)
 	GetProject(ctx context.Context, projectID, userID string) (Project, error)
 	CreateProject(ctx context.Context, input CreateProjectInput) (Project, Event, error)
+	UpsertGitHubAppInstallation(ctx context.Context, input UpsertGitHubAppInstallationInput) (GitHubAppInstallation, error)
+	ListGitHubAppInstallations(ctx context.Context, workspaceID, userID string) ([]GitHubAppInstallation, error)
 	GetGitHubWebhookTarget(ctx context.Context, projectID, repositoryFullName string) (GitHubWebhookTarget, error)
+	ListGitHubAppWebhookTargets(ctx context.Context, installationID int64, repositoryFullName string) ([]GitHubWebhookTarget, error)
 	ClaimGitHubDelivery(ctx context.Context, projectID, deliveryID, eventType string) (GitHubDeliveryClaim, error)
 	CompleteGitHubDelivery(ctx context.Context, projectID, deliveryID string) error
 	FailGitHubDelivery(ctx context.Context, projectID, deliveryID string) error

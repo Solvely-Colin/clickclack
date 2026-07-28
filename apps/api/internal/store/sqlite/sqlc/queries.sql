@@ -1613,12 +1613,38 @@ VALUES (
 
 -- name: InsertProjectRepository :exec
 INSERT INTO project_repositories (
-  id, project_id, provider, owner, name, full_name, url, created_at
+  id, project_id, github_installation_id, provider, owner, name, full_name, url, created_at
 )
 VALUES (
-  sqlc.arg(id), sqlc.arg(project_id), 'github', sqlc.arg(owner), sqlc.arg(name),
+  sqlc.arg(id), sqlc.arg(project_id), sqlc.narg(github_installation_id), 'github', sqlc.arg(owner), sqlc.arg(name),
   sqlc.arg(full_name), sqlc.arg(url), sqlc.arg(created_at)
 );
+
+-- name: UpsertGitHubAppInstallation :one
+INSERT INTO github_app_installations (
+  installation_id, workspace_id, account_login, account_type, repository_selection,
+  installed_by, created_at, updated_at
+)
+VALUES (
+  sqlc.arg(installation_id), sqlc.arg(workspace_id), sqlc.arg(account_login),
+  sqlc.arg(account_type), sqlc.arg(repository_selection), sqlc.arg(installed_by),
+  sqlc.arg(created_at), sqlc.arg(updated_at)
+)
+ON CONFLICT(installation_id, workspace_id) DO UPDATE SET
+  account_login = excluded.account_login,
+  account_type = excluded.account_type,
+  repository_selection = excluded.repository_selection,
+  installed_by = excluded.installed_by,
+  updated_at = excluded.updated_at
+RETURNING installation_id, workspace_id, account_login, account_type,
+          repository_selection, installed_by, created_at, updated_at;
+
+-- name: ListGitHubAppInstallations :many
+SELECT installation_id, workspace_id, account_login, account_type,
+       repository_selection, installed_by, created_at, updated_at
+FROM github_app_installations
+WHERE workspace_id = sqlc.arg(workspace_id)
+ORDER BY account_login, installation_id;
 
 -- name: InsertProjectMember :exec
 INSERT INTO project_members (project_id, user_id, role, created_at)
@@ -1646,7 +1672,7 @@ JOIN channels c ON c.id = p.channel_id
 WHERE p.id = sqlc.arg(project_id);
 
 -- name: ListProjectRepositories :many
-SELECT id, project_id, provider, owner, name, full_name, url, created_at
+SELECT id, project_id, github_installation_id, provider, owner, name, full_name, url, created_at
 FROM project_repositories
 WHERE project_id = sqlc.arg(project_id)
 ORDER BY full_name, id;
@@ -1666,6 +1692,16 @@ JOIN project_repositories pr ON pr.project_id = p.id
 WHERE p.id = sqlc.arg(project_id)
   AND pr.provider = 'github'
   AND pr.full_name = sqlc.arg(repository_full_name);
+
+-- name: ListGitHubAppWebhookTargets :many
+SELECT p.id AS project_id, p.workspace_id, p.channel_id, p.integration_user_id,
+       pr.id AS repository_id, pr.full_name AS repository_full_name, p.webhook_secret
+FROM projects p
+JOIN project_repositories pr ON pr.project_id = p.id
+WHERE pr.github_installation_id = sqlc.arg(installation_id)
+  AND pr.provider = 'github'
+  AND pr.full_name = sqlc.arg(repository_full_name)
+ORDER BY p.id;
 
 -- name: ClaimGitHubDelivery :execrows
 INSERT OR IGNORE INTO github_deliveries (

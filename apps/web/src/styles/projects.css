@@ -262,6 +262,88 @@
   gap: 8px;
 }
 
+.github-app-heading {
+  margin-bottom: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.github-app-connect {
+  min-height: 68px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.github-app-connect strong,
+.github-app-connect span {
+  display: block;
+}
+
+.github-app-connect strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.github-app-connect span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-picker {
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.repository-option {
+  min-height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 18px 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.repository-option:last-child {
+  border-bottom: 0;
+}
+
+.repository-option:hover {
+  background: var(--hover);
+}
+
+.repository-option input {
+  width: 15px;
+  height: 15px;
+}
+
+.repository-option > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.repository-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .participant-list {
   max-height: 180px;
   overflow: auto;
@@ -448,6 +530,15 @@
   .project-form__grid,
   .project-row {
     grid-template-columns: 1fr;
+  }
+
+  .github-app-connect {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .github-app-connect .projects-button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .project-row {

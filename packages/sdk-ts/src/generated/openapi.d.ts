@@ -345,6 +345,91 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/workspaces/{workspace_id}/github-app": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get GitHub App installations and repositories available to a workspace */
+    get: operations["getWorkspaceGitHubApp"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/workspaces/{workspace_id}/github-app/install": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Start installing the configured GitHub App for a workspace */
+    get: operations["startGitHubAppInstall"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/github/app/setup": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Continue a GitHub App installation through user verification */
+    get: operations["finishGitHubAppSetup"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/github/app/callback": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Verify and connect a GitHub App installation to a workspace */
+    get: operations["verifyGitHubAppInstallation"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/hooks/github/app": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Receive signed repository activity from the configured GitHub App */
+    post: operations["receiveGitHubAppWebhook"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/projects/{project_id}": {
     parameters: {
       query?: never;
@@ -1816,7 +1901,8 @@ export interface components {
       name: string;
       slug?: string;
       description?: string;
-      repositories: string[];
+      repositories?: string[];
+      github_repositories?: components["schemas"]["GitHubAppRepositorySelection"][];
       member_ids?: string[];
     };
     ProjectRepository: {
@@ -1829,6 +1915,8 @@ export interface components {
       full_name: string;
       /** Format: uri */
       url: string;
+      /** Format: int64 */
+      github_installation_id?: number;
       /** Format: date-time */
       created_at: string;
     };
@@ -1858,9 +1946,45 @@ export interface components {
       /** @description One-time webhook secret returned only when the project is created. */
       secret: string;
     };
+    GitHubAppRepositorySelection: {
+      /** Format: int64 */
+      installation_id: number;
+      /** @description Canonical GitHub owner/name identifier. */
+      full_name: string;
+    };
+    GitHubAppInstallation: {
+      /** Format: int64 */
+      installation_id: number;
+      workspace_id: string;
+      account_login: string;
+      account_type: string;
+      /** @enum {string} */
+      repository_selection: "all" | "selected";
+      installed_by: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    GitHubAppRepository: {
+      /** Format: int64 */
+      installation_id: number;
+      /** Format: int64 */
+      id: number;
+      full_name: string;
+      /** Format: uri */
+      html_url: string;
+      private: boolean;
+    };
+    GitHubAppStatus: {
+      configured: boolean;
+      slug?: string;
+      installations: components["schemas"]["GitHubAppInstallation"][];
+      repositories: components["schemas"]["GitHubAppRepository"][];
+    };
     CreateProjectResponse: {
       project: components["schemas"]["Project"];
-      webhook: components["schemas"]["ProjectWebhookHandoff"];
+      webhook?: components["schemas"]["ProjectWebhookHandoff"];
     };
     ProjectContextResponse: {
       project: components["schemas"]["Project"];
@@ -2922,6 +3046,116 @@ export interface operations {
       };
       /** @description Workspace manager permission required */
       403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  getWorkspaceGitHubApp: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        workspace_id: components["parameters"]["workspace_id"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description GitHub App connection status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GitHubAppStatus"];
+        };
+      };
+    };
+  };
+  startGitHubAppInstall: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        workspace_id: components["parameters"]["workspace_id"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Redirect to the GitHub App installation page */
+      302: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Workspace manager permission required */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  finishGitHubAppSetup: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Redirect to GitHub OAuth verification */
+      302: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  verifyGitHubAppInstallation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Redirect to the workspace Projects page */
+      302: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  receiveGitHubAppWebhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Delivery accepted, ignored, or already processed */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Invalid webhook signature */
+      401: {
         headers: {
           [name: string]: unknown;
         };

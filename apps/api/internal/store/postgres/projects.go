@@ -137,13 +137,14 @@ func (s *Store) CreateProject(ctx context.Context, input store.CreateProjectInpu
 	}
 	for _, repository := range input.Repositories {
 		if err := qtx.InsertProjectRepository(ctx, storedb.InsertProjectRepositoryParams{
-			ID:        newID("rep"),
-			ProjectID: projectID,
-			Owner:     repository.Owner,
-			Name:      repository.Name,
-			FullName:  repository.FullName,
-			Url:       repository.URL,
-			CreatedAt: createdAt,
+			ID:                   newID("rep"),
+			ProjectID:            projectID,
+			GithubInstallationID: optionalGitHubInstallationID(repository.GitHubInstallationID),
+			Owner:                repository.Owner,
+			Name:                 repository.Name,
+			FullName:             repository.FullName,
+			Url:                  repository.URL,
+			CreatedAt:            createdAt,
 		}); err != nil {
 			return store.Project{}, store.Event{}, err
 		}
@@ -193,6 +194,60 @@ func (s *Store) CreateProject(ctx context.Context, input store.CreateProjectInpu
 	return project, event, nil
 }
 
+func (s *Store) UpsertGitHubAppInstallation(ctx context.Context, input store.UpsertGitHubAppInstallationInput) (store.GitHubAppInstallation, error) {
+	if input.InstallationID <= 0 || strings.TrimSpace(input.WorkspaceID) == "" ||
+		strings.TrimSpace(input.AccountLogin) == "" || strings.TrimSpace(input.InstalledBy) == "" {
+		return store.GitHubAppInstallation{}, errors.New("invalid GitHub App installation")
+	}
+	selection := strings.TrimSpace(input.RepositorySelection)
+	if selection != "all" && selection != "selected" {
+		return store.GitHubAppInstallation{}, errors.New("invalid GitHub repository selection")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.GitHubAppInstallation{}, err
+	}
+	defer tx.Rollback()
+	if err := requireWorkspaceManagerTx(ctx, tx, input.WorkspaceID, input.InstalledBy); err != nil {
+		return store.GitHubAppInstallation{}, err
+	}
+	timestamp := now()
+	row, err := s.q.WithTx(tx).UpsertGitHubAppInstallation(ctx, storedb.UpsertGitHubAppInstallationParams{
+		InstallationID: input.InstallationID, WorkspaceID: input.WorkspaceID,
+		AccountLogin: strings.TrimSpace(input.AccountLogin), AccountType: strings.TrimSpace(input.AccountType),
+		RepositorySelection: selection, InstalledBy: input.InstalledBy,
+		CreatedAt: timestamp, UpdatedAt: timestamp,
+	})
+	if err != nil {
+		return store.GitHubAppInstallation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.GitHubAppInstallation{}, err
+	}
+	return githubAppInstallationFromFields(
+		row.InstallationID, row.WorkspaceID, row.AccountLogin, row.AccountType,
+		row.RepositorySelection, row.InstalledBy, row.CreatedAt, row.UpdatedAt,
+	), nil
+}
+
+func (s *Store) ListGitHubAppInstallations(ctx context.Context, workspaceID, userID string) ([]store.GitHubAppInstallation, error) {
+	if err := s.requireMembership(ctx, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	rows, err := s.q.ListGitHubAppInstallations(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]store.GitHubAppInstallation, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, githubAppInstallationFromFields(
+			row.InstallationID, row.WorkspaceID, row.AccountLogin, row.AccountType,
+			row.RepositorySelection, row.InstalledBy, row.CreatedAt, row.UpdatedAt,
+		))
+	}
+	return result, nil
+}
+
 func (s *Store) GetGitHubWebhookTarget(ctx context.Context, projectID, repositoryFullName string) (store.GitHubWebhookTarget, error) {
 	row, err := s.q.GetGitHubWebhookTarget(ctx, storedb.GetGitHubWebhookTargetParams{
 		ProjectID:          projectID,
@@ -206,6 +261,24 @@ func (s *Store) GetGitHubWebhookTarget(ctx context.Context, projectID, repositor
 		IntegrationUserID: row.IntegrationUserID, RepositoryID: row.RepositoryID,
 		RepositoryFullName: row.RepositoryFullName, WebhookSecret: row.WebhookSecret,
 	}, nil
+}
+
+func (s *Store) ListGitHubAppWebhookTargets(ctx context.Context, installationID int64, repositoryFullName string) ([]store.GitHubWebhookTarget, error) {
+	rows, err := s.q.ListGitHubAppWebhookTargets(ctx, storedb.ListGitHubAppWebhookTargetsParams{
+		InstallationID: sqlInt64(installationID), RepositoryFullName: strings.ToLower(strings.TrimSpace(repositoryFullName)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]store.GitHubWebhookTarget, 0, len(rows))
+	for _, row := range rows {
+		targets = append(targets, store.GitHubWebhookTarget{
+			ProjectID: row.ProjectID, WorkspaceID: row.WorkspaceID, ChannelID: row.ChannelID,
+			IntegrationUserID: row.IntegrationUserID, RepositoryID: row.RepositoryID,
+			RepositoryFullName: row.RepositoryFullName, WebhookSecret: row.WebhookSecret,
+		})
+	}
+	return targets, nil
 }
 
 func (s *Store) ClaimGitHubDelivery(ctx context.Context, projectID, deliveryID, eventType string) (store.GitHubDeliveryClaim, error) {
@@ -295,7 +368,8 @@ func hydrateProject(ctx context.Context, q *storedb.Queries, project *store.Proj
 	project.Repositories = make([]store.ProjectRepository, 0, len(repositories))
 	for _, repository := range repositories {
 		project.Repositories = append(project.Repositories, store.ProjectRepository{
-			ID: repository.ID, ProjectID: repository.ProjectID, Provider: repository.Provider,
+			ID: repository.ID, ProjectID: repository.ProjectID,
+			GitHubInstallationID: int64PtrFromNull(repository.GithubInstallationID), Provider: repository.Provider,
 			Owner: repository.Owner, Name: repository.Name, FullName: repository.FullName,
 			URL: repository.Url, CreatedAt: repository.CreatedAt,
 		})
@@ -312,6 +386,32 @@ func hydrateProject(ctx context.Context, q *storedb.Queries, project *store.Proj
 		})
 	}
 	return nil
+}
+
+func optionalGitHubInstallationID(value int64) sql.NullInt64 {
+	if value <= 0 {
+		return sql.NullInt64{}
+	}
+	return sqlInt64(value)
+}
+
+func int64PtrFromNull(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
+}
+
+func githubAppInstallationFromFields(
+	installationID int64, workspaceID, accountLogin, accountType, repositorySelection,
+	installedBy, createdAt, updatedAt string,
+) store.GitHubAppInstallation {
+	return store.GitHubAppInstallation{
+		InstallationID: installationID, WorkspaceID: workspaceID, AccountLogin: accountLogin,
+		AccountType: accountType, RepositorySelection: repositorySelection, InstalledBy: installedBy,
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
 }
 
 func projectFromGetRow(row storedb.GetProjectRow) store.Project {

@@ -23,11 +23,17 @@ import (
 )
 
 type createProjectRequest struct {
-	Name         string   `json:"name"`
-	Slug         string   `json:"slug"`
-	Description  string   `json:"description"`
-	Repositories []string `json:"repositories"`
-	MemberIDs    []string `json:"member_ids"`
+	Name               string                         `json:"name"`
+	Slug               string                         `json:"slug"`
+	Description        string                         `json:"description"`
+	Repositories       []string                       `json:"repositories"`
+	GitHubRepositories []githubAppRepositorySelection `json:"github_repositories"`
+	MemberIDs          []string                       `json:"member_ids"`
+}
+
+type githubAppRepositorySelection struct {
+	InstallationID int64  `json:"installation_id"`
+	FullName       string `json:"full_name"`
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -107,19 +113,43 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	repositories := make([]store.CreateProjectRepositoryInput, 0, len(body.Repositories))
-	seen := make(map[string]struct{}, len(body.Repositories))
-	for _, raw := range body.Repositories {
-		repository, err := parseGitHubRepository(raw)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+	workspaceID := chi.URLParam(r, "workspace_id")
+	if err := s.requireWorkspaceManager(r.Context(), workspaceID, act.user.ID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if len(body.Repositories) > 0 && len(body.GitHubRepositories) > 0 {
+		writeError(w, http.StatusBadRequest, errors.New("choose GitHub App repositories or manual repositories, not both"))
+		return
+	}
+	var repositories []store.CreateProjectRepositoryInput
+	if len(body.GitHubRepositories) > 0 {
+		if !s.githubApp.configured() {
+			writeError(w, http.StatusBadRequest, errors.New("GitHub App is not configured"))
 			return
 		}
-		if _, ok := seen[repository.FullName]; ok {
-			continue
+		repositories, err = s.resolveGitHubAppProjectRepositories(
+			r.Context(), workspaceID, act.user.ID, body.GitHubRepositories,
+		)
+		if err != nil {
+			writeStoreError(w, err)
+			return
 		}
-		seen[repository.FullName] = struct{}{}
-		repositories = append(repositories, repository)
+	} else {
+		repositories = make([]store.CreateProjectRepositoryInput, 0, len(body.Repositories))
+		seen := make(map[string]struct{}, len(body.Repositories))
+		for _, raw := range body.Repositories {
+			repository, err := parseGitHubRepository(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if _, ok := seen[repository.FullName]; ok {
+				continue
+			}
+			seen[repository.FullName] = struct{}{}
+			repositories = append(repositories, repository)
+		}
 	}
 	secret, err := newProjectWebhookSecret()
 	if err != nil {
@@ -127,7 +157,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project, event, err := s.store.CreateProject(r.Context(), store.CreateProjectInput{
-		WorkspaceID:   chi.URLParam(r, "workspace_id"),
+		WorkspaceID:   workspaceID,
 		Name:          body.Name,
 		Slug:          body.Slug,
 		Description:   body.Description,
@@ -143,11 +173,68 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if event.ID != "" {
 		s.publishEvent(r.Context(), event)
 	}
-	webhookURL := strings.TrimRight(s.apiBaseURL(r), "/") + "/api/hooks/github/projects/" + project.ID
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"project": project,
-		"webhook": map[string]string{"url": webhookURL, "secret": secret},
-	})
+	response := map[string]any{"project": project}
+	if len(body.GitHubRepositories) == 0 {
+		webhookURL := strings.TrimRight(s.apiBaseURL(r), "/") + "/api/hooks/github/projects/" + project.ID
+		response["webhook"] = map[string]string{"url": webhookURL, "secret": secret}
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) resolveGitHubAppProjectRepositories(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+	selections []githubAppRepositorySelection,
+) ([]store.CreateProjectRepositoryInput, error) {
+	if len(selections) > 50 {
+		return nil, errors.New("a project can link at most 50 GitHub repositories")
+	}
+	installations, err := s.store.ListGitHubAppInstallations(ctx, workspaceID, userID)
+	if err != nil {
+		return nil, err
+	}
+	allowedInstallations := make(map[int64]struct{}, len(installations))
+	for _, installation := range installations {
+		allowedInstallations[installation.InstallationID] = struct{}{}
+	}
+	available := make(map[int64]map[string]GitHubAppRepository)
+	repositories := make([]store.CreateProjectRepositoryInput, 0, len(selections))
+	seen := make(map[string]struct{}, len(selections))
+	for _, selection := range selections {
+		if _, ok := allowedInstallations[selection.InstallationID]; !ok {
+			return nil, errors.New("selected GitHub App installation does not belong to this workspace")
+		}
+		fullName := strings.ToLower(strings.TrimSpace(selection.FullName))
+		if fullName == "" {
+			return nil, errors.New("selected GitHub repository is required")
+		}
+		if _, ok := available[selection.InstallationID]; !ok {
+			items, err := s.listGitHubAppRepositories(ctx, selection.InstallationID)
+			if err != nil {
+				return nil, errors.New("could not load repositories from GitHub")
+			}
+			available[selection.InstallationID] = make(map[string]GitHubAppRepository, len(items))
+			for _, item := range items {
+				available[selection.InstallationID][item.FullName] = item
+			}
+		}
+		repository, ok := available[selection.InstallationID][fullName]
+		if !ok {
+			return nil, errors.New("selected repository is not accessible to the GitHub App installation")
+		}
+		if _, ok := seen[fullName]; ok {
+			continue
+		}
+		parsed, err := parseGitHubRepository(repository.HTMLURL)
+		if err != nil || parsed.FullName != fullName {
+			return nil, errors.New("GitHub returned an invalid repository URL")
+		}
+		parsed.GitHubInstallationID = selection.InstallationID
+		repositories = append(repositories, parsed)
+		seen[fullName] = struct{}{}
+	}
+	return repositories, nil
 }
 
 func parseGitHubRepository(raw string) (store.CreateProjectRepositoryInput, error) {
@@ -183,7 +270,10 @@ func newProjectWebhookSecret() (string, error) {
 }
 
 type githubProjectPayload struct {
-	Action     string `json:"action"`
+	Action       string `json:"action"`
+	Installation *struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
@@ -285,23 +375,48 @@ func (s *Server) githubProjectWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("GitHub delivery and event headers are required"))
 		return
 	}
-	claim, err := s.store.ClaimGitHubDelivery(r.Context(), target.ProjectID, deliveryID, eventType)
+	result, err := s.processGitHubProjectDelivery(r, target, deliveryID, eventType, payload)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	switch claim {
+	switch result.status {
 	case store.GitHubDeliveryComplete:
 		writeJSON(w, http.StatusAccepted, map[string]any{"status": "duplicate", "delivery_id": deliveryID})
-		return
 	case store.GitHubDeliveryProcessing:
 		w.Header().Set("Retry-After", "5")
 		writeError(w, http.StatusServiceUnavailable, errors.New("GitHub delivery is still processing"))
-		return
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status": "accepted", "delivery_id": deliveryID, "updates": result.updates,
+		})
+	}
+}
+
+type githubDeliveryResult struct {
+	status  store.GitHubDeliveryClaim
+	updates int
+}
+
+func (s *Server) processGitHubProjectDelivery(
+	r *http.Request,
+	target store.GitHubWebhookTarget,
+	deliveryID string,
+	eventType string,
+	payload githubProjectPayload,
+) (result githubDeliveryResult, err error) {
+	claim, err := s.store.ClaimGitHubDelivery(r.Context(), target.ProjectID, deliveryID, eventType)
+	if err != nil {
+		return githubDeliveryResult{}, err
+	}
+	switch claim {
+	case store.GitHubDeliveryComplete:
+		return githubDeliveryResult{status: claim}, nil
+	case store.GitHubDeliveryProcessing:
+		return githubDeliveryResult{status: claim}, nil
 	case store.GitHubDeliveryClaimed:
 	default:
-		writeError(w, http.StatusInternalServerError, errors.New("invalid GitHub delivery claim state"))
-		return
+		return githubDeliveryResult{}, errors.New("invalid GitHub delivery claim state")
 	}
 	completed := false
 	defer func() {
@@ -315,18 +430,14 @@ func (s *Server) githubProjectWebhook(w http.ResponseWriter, r *http.Request) {
 	updates := githubProjectUpdates(eventType, payload)
 	for _, update := range updates {
 		if err := s.postGitHubProjectUpdate(r, target, deliveryID, update); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+			return githubDeliveryResult{}, err
 		}
 	}
 	if err := s.store.CompleteGitHubDelivery(r.Context(), target.ProjectID, deliveryID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return githubDeliveryResult{}, err
 	}
 	completed = true
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status": "accepted", "delivery_id": deliveryID, "updates": len(updates),
-	})
+	return githubDeliveryResult{status: store.GitHubDeliveryClaimed, updates: len(updates)}, nil
 }
 
 func validGitHubSignature(payload []byte, signature, secret string) bool {

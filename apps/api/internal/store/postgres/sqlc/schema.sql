@@ -578,9 +578,25 @@ CREATE TABLE projects (
   UNIQUE(workspace_id, slug)
 );
 
+CREATE TABLE github_app_installations (
+  installation_id BIGINT NOT NULL,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  account_login TEXT NOT NULL,
+  account_type TEXT NOT NULL,
+  repository_selection TEXT NOT NULL CHECK (repository_selection IN ('all', 'selected')),
+  installed_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, workspace_id)
+);
+
+CREATE INDEX idx_github_app_installations_workspace
+  ON github_app_installations(workspace_id, installation_id);
+
 CREATE TABLE project_repositories (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  github_installation_id BIGINT,
   provider TEXT NOT NULL CHECK (provider = 'github'),
   owner TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -591,6 +607,8 @@ CREATE TABLE project_repositories (
 );
 
 CREATE INDEX idx_project_repositories_full_name ON project_repositories(provider, full_name);
+CREATE INDEX idx_project_repositories_github_installation
+  ON project_repositories(github_installation_id, provider, full_name);
 
 CREATE TABLE project_members (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

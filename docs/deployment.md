@@ -280,11 +280,59 @@ domains for stronger isolation.
 
 OAuth state and desktop grants are stored in the configured database, so
 callbacks can land on a different replica and survive process restarts.
+
+## GitHub App for projects
+
+Project rooms can use one GitHub App webhook instead of requiring a webhook in
+every linked repository. Create a GitHub App owned by the account or
+organization that operates the ClickClack deployment.
+
+Set these GitHub App URLs, using `CLICKCLACK_PUBLIC_API_URL` when it differs
+from the public browser URL:
+
+- Callback URL: `<public-api-url>/api/github/app/callback`
+- Setup URL: `<public-api-url>/api/github/app/setup`
+- Webhook URL: `<public-api-url>/api/hooks/github/app`
+
+Grant read-only repository permissions for **Checks**, **Issues**, and
+**Pull requests**. Metadata read access is included by GitHub. Subscribe to
+check run, check suite, issue, issue comment, pull request, pull request review,
+and pull request review comment events. ClickClack does not need repository
+write permission.
+
+Generate a private key in the GitHub App settings and configure all six values
+together. Use a random webhook secret of at least 32 characters:
+
+```sh
+CLICKCLACK_GITHUB_APP_ID=123456
+CLICKCLACK_GITHUB_APP_SLUG=clickclack-projects
+CLICKCLACK_GITHUB_APP_CLIENT_ID=Iv23.xxxxxxxxxxxx
+CLICKCLACK_GITHUB_APP_CLIENT_SECRET=...
+CLICKCLACK_GITHUB_APP_PRIVATE_KEY_BASE64="$(base64 < clickclack-projects.pem | tr -d '\n')"
+CLICKCLACK_GITHUB_APP_WEBHOOK_SECRET=...
+```
+
+PowerShell can encode the private key without line wrapping:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("clickclack-projects.pem"))
+```
+
+After restart, workspace owners and moderators see **Connect GitHub** on the
+Projects page. GitHub returns the installation to ClickClack, ClickClack
+verifies that the signed-in GitHub user can access it, and the repository
+picker only offers repositories granted to that installation. App-backed
+projects do not expose or require per-repository webhook secrets. Existing
+manual project webhooks remain supported when the GitHub App is not configured.
+
 If a deployment configures edge rate limiting, cover:
 
 - `GET /api/auth/github/start`
 - `GET /api/auth/github/desktop/start`
 - `POST /api/auth/github/desktop/consume`
+- `GET /api/workspaces/{workspace_id}/github-app/install`
+- `GET /api/github/app/setup`
+- `GET /api/github/app/callback`
 
 Use a client identity that is trustworthy for the complete deployment path and
 leave enough headroom for legitimate users behind shared networks. The Go
@@ -303,10 +351,11 @@ alert on sustained `503` or
 on pending capacity before it reaches the hard limit.
 
 Configure proxy and edge logs to omit query strings on every GitHub OAuth
-route, including `/api/auth/github/callback`. Query strings can contain
-short-lived authorization codes or desktop verifier challenges. Never log
-`Authorization`, `Cookie`, or `Set-Cookie` headers. ClickClack's request logger
-records route patterns without query strings.
+route, including `/api/auth/github/callback` and `/api/github/app/callback`.
+Query strings can contain short-lived authorization codes, signed installation
+state, or desktop verifier challenges. Never log `Authorization`, `Cookie`, or
+`Set-Cookie` headers. ClickClack's request logger records route patterns
+without query strings.
 
 ## Migrations
 
